@@ -4,8 +4,32 @@
 #include <cstddef>
 #include <cstdint>
 #include <thread>
+#include <type_traits>
+#include <utility>
 
 namespace {
+
+using ContractQueue = arccore::SpscQueue<unsigned, 8>;
+
+static_assert(ContractQueue::capacity() == 8);
+static_assert(noexcept(std::declval<ContractQueue&>().try_push(
+    std::declval<const unsigned&>())));
+static_assert(noexcept(
+    std::declval<ContractQueue&>().try_pop(std::declval<unsigned&>())));
+static_assert(noexcept(std::declval<const ContractQueue&>().empty()));
+static_assert(!std::is_copy_constructible_v<ContractQueue>);
+static_assert(!std::is_copy_assignable_v<ContractQueue>);
+static_assert(!std::is_move_constructible_v<ContractQueue>);
+static_assert(!std::is_move_assignable_v<ContractQueue>);
+
+struct Payload {
+  std::uint32_t sequence;
+  std::uint16_t kind;
+  bool active;
+};
+
+static_assert(std::is_trivially_copyable_v<Payload>);
+static_assert(std::is_default_constructible_v<Payload>);
 
 void test_new_queue() {
   arccore::SpscQueue<int, 8> queue;
@@ -24,54 +48,95 @@ void test_push_then_pop() {
   assert(queue.empty());
 }
 
-void test_fifo_full_and_empty() {
-  arccore::SpscQueue<int, 4> queue;
+void test_capacity_boundaries() {
+  arccore::SpscQueue<unsigned, 2> queue;
 
-  assert(queue.try_push(10));
-  assert(queue.try_push(20));
-  assert(queue.try_push(30));
-  assert(queue.try_push(40));
-  assert(!queue.try_push(50));
+  assert(queue.capacity() == 2);
+  assert(queue.try_push(10U));
+  assert(queue.try_push(20U));
+  assert(!queue.try_push(30U));
 
-  for (const int expected : {10, 20, 30, 40}) {
-    int value = 0;
-    assert(queue.try_pop(value));
-    assert(value == expected);
-  }
+  unsigned value = 0;
+  assert(queue.try_pop(value));
+  assert(value == 10U);
+  assert(queue.try_push(30U));
 
-  int value = 0;
+  assert(queue.try_pop(value));
+  assert(value == 20U);
+  assert(queue.try_pop(value));
+  assert(value == 30U);
   assert(!queue.try_pop(value));
 }
 
-void test_wraparound() {
-  arccore::SpscQueue<std::size_t, 4> queue;
+void test_repeated_wraparound() {
+  arccore::SpscQueue<unsigned, 4> queue;
+  unsigned next_to_push = 0;
+  unsigned next_to_pop = 0;
 
-  for (std::size_t cycle = 0; cycle < 100; ++cycle) {
-    for (std::size_t offset = 0; offset < queue.capacity(); ++offset) {
-      assert(queue.try_push(cycle * queue.capacity() + offset));
+  for (unsigned cycle = 0; cycle < 1000; ++cycle) {
+    for (std::size_t count = 0; count < queue.capacity(); ++count) {
+      assert(queue.try_push(next_to_push));
+      ++next_to_push;
     }
-    for (std::size_t offset = 0; offset < queue.capacity(); ++offset) {
-      std::size_t value = 0;
+    assert(!queue.try_push(next_to_push));
+
+    for (std::size_t count = 0; count < queue.capacity(); ++count) {
+      unsigned value = 0;
       assert(queue.try_pop(value));
-      assert(value == cycle * queue.capacity() + offset);
+      assert(value == next_to_pop);
+      ++next_to_pop;
     }
   }
+
+  assert(next_to_pop == next_to_push);
+  assert(queue.empty());
 }
 
-void test_repeated_push_pop() {
-  arccore::SpscQueue<std::uint32_t, 2> queue;
+void test_interleaved_operations() {
+  arccore::SpscQueue<unsigned, 4> queue;
+  unsigned value = 0;
 
-  for (std::uint32_t expected = 0; expected < 10000; ++expected) {
-    assert(queue.try_push(expected));
-    std::uint32_t value = 0;
+  assert(queue.try_push(1U));
+  assert(queue.try_push(2U));
+  assert(queue.try_push(3U));
+  assert(queue.try_pop(value));
+  assert(value == 1U);
+  assert(queue.try_push(4U));
+  assert(queue.try_push(5U));
+  assert(!queue.try_push(6U));
+
+  assert(queue.try_pop(value));
+  assert(value == 2U);
+  assert(queue.try_pop(value));
+  assert(value == 3U);
+  assert(queue.try_push(6U));
+  assert(queue.try_push(7U));
+
+  for (const unsigned expected : {4U, 5U, 6U, 7U}) {
     assert(queue.try_pop(value));
     assert(value == expected);
   }
+
+  assert(queue.empty());
+}
+
+void test_struct_payload() {
+  arccore::SpscQueue<Payload, 2> queue;
+  const Payload input{42U, 7U, true};
+
+  assert(queue.try_push(input));
+
+  Payload output{};
+  assert(queue.try_pop(output));
+  assert(output.sequence == input.sequence);
+  assert(output.kind == input.kind);
+  assert(output.active == input.active);
 }
 
 void test_concurrent_transfer() {
   constexpr std::uint32_t transfer_count = 1'000'000;
   arccore::SpscQueue<std::uint32_t, 1024> queue;
+  std::uint32_t received_count = 0;
 
   std::thread producer([&queue] {
     for (std::uint32_t value = 0; value < transfer_count; ++value) {
@@ -81,18 +146,20 @@ void test_concurrent_transfer() {
     }
   });
 
-  std::thread consumer([&queue] {
-    for (std::uint32_t expected = 0; expected < transfer_count; ++expected) {
+  std::thread consumer([&queue, &received_count] {
+    while (received_count < transfer_count) {
       std::uint32_t value = 0;
       while (!queue.try_pop(value)) {
         std::this_thread::yield();
       }
-      assert(value == expected);
+      assert(value == received_count);
+      ++received_count;
     }
   });
 
   producer.join();
   consumer.join();
+  assert(received_count == transfer_count);
   assert(queue.empty());
 }
 
@@ -101,8 +168,9 @@ void test_concurrent_transfer() {
 int main() {
   test_new_queue();
   test_push_then_pop();
-  test_fifo_full_and_empty();
-  test_wraparound();
-  test_repeated_push_pop();
+  test_capacity_boundaries();
+  test_repeated_wraparound();
+  test_interleaved_operations();
+  test_struct_payload();
   test_concurrent_transfer();
 }

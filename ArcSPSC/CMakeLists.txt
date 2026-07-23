@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.20)
 
 project(ArcSPSC VERSION 0.1.0 LANGUAGES CXX)
 
+option(ARCSPSC_BUILD_BENCHMARKS "Build ArcSPSC benchmarks" OFF)
+
 add_library(arccore_spsc INTERFACE)
 add_library(ArcCore::SPSC ALIAS arccore_spsc)
 
@@ -31,3 +33,7 @@ else()
 endif()
 
 add_test(NAME arcspsc_tests COMMAND arcspsc_tests)
+
+if(ARCSPSC_BUILD_BENCHMARKS)
+  add_subdirectory(benchmarks)
+endif()
