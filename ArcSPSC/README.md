@@ -26,11 +26,22 @@ ctest --test-dir build --output-on-failure
 
 ## Benchmarks
 
-Benchmarks are optional and resolve all benchmark dependencies only when
-enabled. Boost must be installed. Rigtorp SPSCQueue and moodycamel
-ReaderWriterQueue are fetched at documented release tags when they are not
-installed. Folly is enabled only when an installed package provides the
-`Folly::folly` CMake target:
+ArcSPSC includes comparative development benchmarks against Boost.Lockfree,
+Rigtorp SPSCQueue, and moodycamel ReaderWriterQueue. Folly is also supported
+when an installed package provides the `Folly::folly` CMake target.
+
+The currently available measurements were collected on an uncontrolled macOS
+development machine and must not be treated as portable performance claims.
+
+- [macOS development benchmark baseline](docs/benchmarks/MACOS_DEVELOPMENT_BASELINE.md)
+
+A controlled public report will require pinned physical cores, documented CPU
+topology, fixed frequency settings, Linux performance counters, and published
+raw results.
+
+Benchmarks are optional and resolve their dependencies only when enabled.
+Boost must be installed. Rigtorp SPSCQueue and moodycamel ReaderWriterQueue are
+fetched at documented release tags when they are not installed:
 
 ```sh
 cmake -S . -B build-benchmarks \
